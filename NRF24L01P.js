@@ -201,7 +201,7 @@ NRF.prototype.setDataRate = function(rate) {
 };
 /** Set the channel, 1-128 */
 NRF.prototype.setChannel = function(channel) {
-  var ch = min(max(1, channel), 128)
+  var ch = Math.min(Math.max(1, channel), 128)
   this.setReg(C.RF_CH, ch);
 };
 /** Set the transmit power - takes a value from 0 (lowest) to 3 (highest) */
