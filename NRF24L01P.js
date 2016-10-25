@@ -200,7 +200,7 @@ NRF.prototype.setDataRate = function(rate) {
   this.setReg(C.RF_SETUP, (this.getReg(C.RF_SETUP)&~(C.RF_DR_LOW|C.RF_DR_HIGH))|rates[rate]);
 };
 /** Set the channel, 1-128 */
-NRF.prototype.setShannel = function(channel) {
+NRF.prototype.setChannel = function(channel) {
   var ch = min(max(1, channel), 128)
   this.setReg(C.RF_CH, ch);
 };
