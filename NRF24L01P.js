@@ -312,6 +312,19 @@ NRF.prototype.sendCommand = function(cmd, callback) {
   return this.sendString(cmd);
 };
 
+/** Print current configuration details */
+NRF.prototype.printDetails = function(status) {
+	this.printStatus(this.getStatus())
+}
+
+/** Print status */
+NRF.prototype.printStatus = function(status) {
+	var rx_dr = (status & C.RX_DR)?1:0
+	var tx_ds = (status & C.TX_DS)?1:0
+	var max_rt = (status & C.MAX_RT)?1:0
+	console.log("STATUS\t\t = " + status + " RX_DR=" + rx_dr + " TX_DS=" + tx_ds + " MAX_RT=" + max_rt + " RX_P_NO=%x TX_FULL=%x\r")
+}
+
 /** Create a new NRF class */
 exports.connect = function(_spi, _csn, _ce, _payload) {
   return new NRF(_spi, _csn, _ce, _payload);
