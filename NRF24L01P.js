@@ -60,6 +60,8 @@ var C = {
   RX_PW_P4    : 0x15,
   RX_PW_P5    : 0x16,
   FIFO_STATUS : 0x17,
+  DYNPD       : 0x1C,
+  FEATURE     : 0x1D,
 
   // Bits
   MASK_RX_DR  : 1<<6, // CONFIG
@@ -111,10 +113,11 @@ var C = {
   FLUSH_TX      : 0xE1,
   FLUSH_RX      : 0xE2,
   REUSE_TX_PL   : 0xE3,
-  NOP           : 0xFF
+  NOP           : 0xFF,
+  ACTIVATE      : 0x50
 };
 
-var BASE_CONFIG = C.EN_CRC;
+var BASE_CONFIG = C.EN_CRC | C.CRCO;
 
 function NRF(_spi, _csn, _ce, _payload) {
   this.CSN = _csn;
@@ -155,17 +158,18 @@ NRF.prototype.setEnabled = function(isEnabled) {
 NRF.prototype.setReg = function(reg, value) {
   this.spi.send([C.W_REGISTER | reg, value], this.CSN);
 };
-/** Set an address (for internal use only) */
-NRF.prototype.setAddr = function(reg, value /* 5 byte array*/) {
-  value = value.clone();
-  value.splice(0,0,C.W_REGISTER | reg);
-  this.spi.send(value, this.CSN);
-};
+
 /** Set receive address (a 5 byte array). Optional pipe argument. Note that pipes>1 share pipe 1's last 4 address digits */
 NRF.prototype.setRXAddr = function(adr, pipe) {
-  if (pipe===undefined) pipe=1;
-  else this.setReg(C.EN_RXADDR, this.getReg(C.EN_RXADDR) | 1<<pipe); // enable RX addr
+  if (pipe===undefined) {
+    pipe = 1;
+  }
+
+  // enable RX addr
+  this.setReg(C.EN_RXADDR, this.getReg(C.EN_RXADDR) | 1<<pipe);
+
   // addresses > 1 use the last 4 bytes from ADDR_P1
+  console.log("set rx addr " + (C.RX_ADDR_P0+pipe)+" <- " + adr);
   this.setAddr(C.RX_ADDR_P0+pipe,(pipe<2) ? adr : [adr[0]]);
 };
 /** Set the transmit address (a 5 byte array) */
@@ -181,13 +185,17 @@ NRF.prototype.getReg = function(reg) {
 NRF.prototype.getAddr = function(reg) {
   var data = this.spi.send([C.R_REGISTER | reg, 0,0,0,0,0], this.CSN);
   data = data.slice(1); // remove first
-  if (reg>C.RX_ADDR_P1) {
+  if (reg>C.RX_ADDR_P1 && reg <= C.RX_ADDR_P5) {
     // addresses > 1 use the last 4 bytes from ADDR_P1
     var fullAddr = this.getAddr(C.RX_ADDR_P1);
     fullAddr.splice(0,1,data[0]);
     return fullAddr;
   }
   return data;
+};
+/** Set an address (for internal use only) */
+NRF.prototype.setAddr = function(reg, value /* 5 byte array*/) {
+  this.spi.send([C.W_REGISTER | reg, value[4], value[3], value[2], value[1], value[0]], this.CSN);
 };
 /** Get the contents of the status register */
 NRF.prototype.getStatus = function(reg) {
@@ -199,9 +207,48 @@ NRF.prototype.setDataRate = function(rate) {
   if (!rate in rates) console.log("Unknown rate");
   this.setReg(C.RF_SETUP, (this.getReg(C.RF_SETUP)&~(C.RF_DR_LOW|C.RF_DR_HIGH))|rates[rate]);
 };
+
+/** Get the data rate, Either 250000, 1000000 or 2000000 */
+NRF.prototype.getDataRate = function() {
+  rate = this.getReg(C.RF_SETUP) & (C.RF_DR_LOW|C.RF_DR_HIGH);
+  if (rate === C.RF_DR_HIGH) {
+    return 2000000;
+  } else if (rate === C.RF_DR_LOW) {
+    return 250000;
+  } else {
+    return 1000000;
+  }
+};
+
+/** Set CRC length 0 (disable), 8 or 16 bit. */
+NRF.prototype.setCRCLength = function(length) {
+  var config = this.getReg(C.RF_CONFIG)&~(C.CRC0|C.EN_CRC);
+  if (length === 8) {
+    config = config | C.EN_CRC;
+  } else if (length === 16) {
+    config = config | C.EN_CRC | C.CRCO;
+  }
+  this.setReg(C.RF_CONFIG, config);
+};
+
+/** Get CRC length 0 (disabled), 8 or 16 bit. */
+NRF.prototype.getCRCLength = function() { 
+  var config = this.getReg(C.RF_CONFIG);
+  var aa = this.getReg(C.RF_AA);
+  if ((config & C.EN_CRC) || aa) {
+    if (config & C.CRCO) {
+      return 16;
+    } else {
+      return 8;
+    }
+  } else {
+    return 0;
+  }
+};
+
 /** Set the channel, 1-128 */
 NRF.prototype.setChannel = function(channel) {
-  var ch = Math.min(Math.max(1, channel), 128)
+  var ch = Math.min(Math.max(1, channel), 128);
   this.setReg(C.RF_CH, ch);
 };
 /** Set the transmit power - takes a value from 0 (lowest) to 3 (highest) */
@@ -314,16 +361,69 @@ NRF.prototype.sendCommand = function(cmd, callback) {
 
 /** Print current configuration details */
 NRF.prototype.printDetails = function(status) {
-	this.printStatus(this.getStatus())
-}
+  this.printStatus(this.getStatus());
+  this.printAddressRegister("RX_ADDR_P0-1 ", C.RX_ADDR_P0, 2);
+  this.printByteRegister("RX_ADDR_P2-5 ", C.RX_ADDR_P2, 4);
+  this.printAddressRegister("TX_ADDR      ", C.TX_ADDR);
+
+  this.printByteRegister("RX_PW_P0-6   ", C.RX_PW_P0, 6);
+  this.printByteRegister("EN_AA        ", C.EN_AA);
+  this.printByteRegister("EN_RXADDR    ", C.EN_RXADDR);
+  this.printByteRegister("RF_CH        ", C.RF_CH);
+  this.printByteRegister("RF_SETUP     ", C.RF_SETUP);
+  this.printByteRegister("SETUP_AW     ", C.SETUP_AW);
+  this.printByteRegister("CONFIG       ", C.CONFIG);
+  this.printByteRegister("DYNPD/FEATURE", C.DYNPD, 2);
+
+  console.log("Data Rate     = " + this.getDataRate());
+  console.log("CRC Length    = " + this.getCRCLength());
+};
+
 
 /** Print status */
 NRF.prototype.printStatus = function(status) {
-	var rx_dr = (status & C.RX_DR)?1:0
-	var tx_ds = (status & C.TX_DS)?1:0
-	var max_rt = (status & C.MAX_RT)?1:0
-	console.log("STATUS\t\t = " + status + " RX_DR=" + rx_dr + " TX_DS=" + tx_ds + " MAX_RT=" + max_rt + " RX_P_NO=%x TX_FULL=%x\r")
-}
+  var rx_dr = (status & C.RX_DR)?1:0;
+  var tx_ds = (status & C.TX_DS)?1:0;
+  var max_rt = (status & C.MAX_RT)?1:0;
+  var rx_p_no = (status >> 1) & 0b111;
+  var tx_full = (status & C.TX_FULL)?1:0;
+  console.log("STATUS        = 0x" + this.formatHex(status) + " RX_DR=" + rx_dr + " TX_DS=" + tx_ds + " MAX_RT=" + max_rt + " RX_P_NO=" + rx_p_no + " TX_FULL="+ tx_full + "\r");
+};
+
+/** Print byte register */
+NRF.prototype.printByteRegister = function(name, reg, count) {
+  count = typeof (count) === "undefined" || count === null ? count = 1 : count;
+  res = "";
+  while (count-- > 0)
+    res = res + "0x" + this.formatHex(this.getReg(reg++)) + " ";
+  console.log(name + " = " + res);
+};
+
+/** Print address register */
+NRF.prototype.printAddressRegister = function(name, reg, count) {
+  count = typeof (count) === "undefined" || count === null ? count = 1 : count;
+  res = "";
+  while(count-- > 0) {
+    var addr = this.getAddr(reg);
+    reg = reg + 1;
+    res = res + "0x";
+    for(i = addr.length - 1; i >=0; i--) {
+      res = res + this.formatHex(addr[i]);
+    }
+    res = res + " ";
+  }
+  console.log(name + " = " + res);
+};
+
+/** Format number to hex with padding */
+NRF.prototype.formatHex = function(val, padding) {
+	var res = val.toString(16);
+	padding = typeof (padding) === "undefined" || padding === null ? padding = 2 : padding;
+    while (res.length < padding) {
+        res = "0" + res;
+    }
+    return res;
+};
 
 /** Create a new NRF class */
 exports.connect = function(_spi, _csn, _ce, _payload) {
